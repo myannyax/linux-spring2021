@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <chrono>
 
 
 using namespace std;
@@ -20,6 +21,8 @@ using namespace std;
 #define IFSTREAM 0
 #define READ 1
 #define MMAP 2
+
+int time_on_stat_output = 0;
 
 bool print_error() {
   if (errno) {
@@ -55,15 +58,19 @@ int fileSize(int fd) {
   if (fstat(fd, &s) == -1) {
     int saveErrno = errno;
     fprintf(stderr, "fstat(%d) returned errno=%d.", fd, saveErrno);
-    return(-1);
+    return (-1);
   }
   return s.st_size;
 }
 
 static void print_map(const unordered_map<char, int> &kek) {
+  std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
   for (auto&[c, n]: kek) {
     cout << "char " << c << ":" << n << "\n";
   }
+  std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+
+  time_on_stat_output += std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count();
 }
 
 int print_file_stats(string filename, int mode, int bs) {
@@ -96,7 +103,7 @@ int print_file_stats(string filename, int mode, int bs) {
       return 1;
     }
 
-    for(;;) {
+    for (;;) {
       ssize_t c = read_all(fd, buffer, bs);
       if (c == 0) {
         break;
@@ -145,8 +152,9 @@ int main(int argc, char *argv[]) {
   for (int i = 3; i < argc; ++i) {
     auto filename = argv[i];
     printf("Stats for: %s\n", filename);
-    int res = print_file_stats(filename, mode, bs * 8);
+    int res = print_file_stats(filename, mode, bs);
     success = success && (res == 0);
   }
+  cout << time_on_stat_output << "\n";
   return !success;
 }
