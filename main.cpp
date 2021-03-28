@@ -23,56 +23,48 @@ using namespace std;
 
 double vectSum(const vector<double> &a) {
   double sum = 0;
-  for (size_t i = 0; i < a.size(); ++i) {
-    sum += a[i];
+  for (double i : a) {
+    sum += i;
   }
   return sum;
 }
 
-double statsForFile(const string &path, unsigned int &size) {
+typedef struct {
+  double stat;
+  off_t size;
+} statResult;
+
+void handleError(const string &path, const string &location) {
+  perror((path + ":" + location).c_str());
+  exit(EXIT_FAILURE);
+}
+
+statResult statsForFile(const string &path) {
   struct stat sb;
   int fd;
 
   if ((fd = open(path.c_str(), O_RDONLY)) == -1) {
-    perror(path.c_str());
-    exit(EXIT_FAILURE);
+    handleError(path, "open");
   }
 
   if (lstat(path.c_str(), &sb) == -1) {
-    perror("fstat");
-    exit(EXIT_FAILURE);
+    handleError(path, "fstat");
   }
 
-  unsigned int n_blocks = (sb.st_size + sb.st_blksize - 1) / sb.st_blksize;
+  unsigned int blkSize = 0;
+  if (ioctl(fd, FIGETBSZ, &blkSize) == -1) {
+    handleError(path, "ioctl(figetbsz)");
+  }
+
+
+  unsigned int n_blocks = (sb.st_size + blkSize - 1) / blkSize;
   unsigned int prev = 0;
   unsigned int len = 0;
-  vector<double> a;
+  vector<double> sequenceLenInfo;
   for (unsigned int j = 0; j < n_blocks; ++j) {
     unsigned int b_c = j;
     if (ioctl(fd, FIBMAP, &b_c) != 0) {
-      switch (errno) {
-        case EBADF:
-          cout << "fd is not a valid file descriptor\n";
-          perror("ioctl");
-          exit(EXIT_FAILURE);
-        case EFAULT:
-          cout << "argp references an inaccessible memory area\n";
-          perror("ioctl");
-          exit(EXIT_FAILURE);
-        case EINVAL:
-          cout << "request or argp is not valid\n";
-          perror("ioctl");
-          exit(EXIT_FAILURE);
-        case ENOTTY:
-          cout
-              << "fd is not associated with a character special device&. The specified request does not apply to the kind of object\n"
-                 "              that the file descriptor fd references.\n";
-          perror("ioctl");
-          exit(EXIT_FAILURE);
-      }
-
-      perror("ioctl");
-      exit(EXIT_FAILURE);
+      handleError(path, "ioctl(fibmap)");
     }
     if (b_c == 0) {
       len = 0;
@@ -81,27 +73,26 @@ double statsForFile(const string &path, unsigned int &size) {
     } else if (b_c == prev + 1) {
       len++;
     } else {
-      a.push_back((double)len / n_blocks);
+      sequenceLenInfo.push_back((double)len / n_blocks);
       len = 1;
     }
     prev = b_c;
   }
   close(fd);
-  size = sb.st_size;
-  return vectSum(a) / a.size();
+  if (sequenceLenInfo.empty()) {
+    return statResult {0, sb.st_size};
+  }
+  return statResult {vectSum(sequenceLenInfo) / sequenceLenInfo.size(), sb.st_size};
 }
 
 int main(int argc, char *argv[]) {
-  vector<string> filenames;
-
   unsigned long long size_sum = 0;
   double stats = 0;
   for (int i = 1; i < argc; ++i) {
-    auto filename = argv[i];
-    unsigned int size = 0;
-    double stat = statsForFile(filename, size);
-    stats += (stat / size);
-    size_sum += size;
+    auto path = argv[i];
+    statResult res = statsForFile(path);
+    stats += (res.stat * res.size);
+    size_sum += res.size;
   }
   cout << stats / size_sum << "\n";
   return 0;
