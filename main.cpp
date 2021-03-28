@@ -21,8 +21,8 @@
 
 using namespace std;
 
-unsigned int vectSum(const vector<unsigned int> &a) {
-  unsigned int sum = 0;
+double vectSum(const vector<double> &a) {
+  double sum = 0;
   for (size_t i = 0; i < a.size(); ++i) {
     sum += a[i];
   }
@@ -46,11 +46,9 @@ double statsForFile(const string &path, unsigned int &size) {
   unsigned int n_blocks = (sb.st_size + sb.st_blksize - 1) / sb.st_blksize;
   unsigned int prev = 0;
   unsigned int len = 0;
-  vector<unsigned int> a;
+  vector<double> a;
   for (unsigned int j = 0; j < n_blocks; ++j) {
     unsigned int b_c = j;
-    //TODO why it says Invalid argument
-    cout << b_c << " " << FIBMAP << "\n";
     if (ioctl(fd, FIBMAP, &b_c) != 0) {
       switch (errno) {
         case EBADF:
@@ -62,13 +60,13 @@ double statsForFile(const string &path, unsigned int &size) {
           perror("ioctl");
           exit(EXIT_FAILURE);
         case EINVAL:
-          // TODO I have this one
           cout << "request or argp is not valid\n";
           perror("ioctl");
           exit(EXIT_FAILURE);
         case ENOTTY:
-          cout << "fd is not associated with a character special device&. The specified request does not apply to the kind of object\n"
-                  "              that the file descriptor fd references.\n";
+          cout
+              << "fd is not associated with a character special device&. The specified request does not apply to the kind of object\n"
+                 "              that the file descriptor fd references.\n";
           perror("ioctl");
           exit(EXIT_FAILURE);
       }
@@ -83,14 +81,14 @@ double statsForFile(const string &path, unsigned int &size) {
     } else if (b_c == prev + 1) {
       len++;
     } else {
-      a.push_back(len / n_blocks);
+      a.push_back((double)len / n_blocks);
       len = 1;
     }
     prev = b_c;
   }
   close(fd);
   size = sb.st_size;
-  return vectSum(a) / ((double) a.size());
+  return vectSum(a) / a.size();
 }
 
 int main(int argc, char *argv[]) {
@@ -102,7 +100,6 @@ int main(int argc, char *argv[]) {
     auto filename = argv[i];
     unsigned int size = 0;
     double stat = statsForFile(filename, size);
-    cout << stat << " " << size << "\n";
     stats += (stat / size);
     size_sum += size;
   }
