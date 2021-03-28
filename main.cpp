@@ -103,6 +103,6 @@ int main(int argc, char *argv[]) {
     stats += (stat / size);
     size_sum += size;
   }
-  cout << stats << "\n";
+  cout << stats / size_sum << "\n";
   return 0;
 }
