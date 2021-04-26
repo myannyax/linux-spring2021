@@ -15,7 +15,7 @@ int main() {
         kek[i] = i;
     }
 
-    transform(3, kek.begin(), kek.end(), out.begin(), my_func);
+    transform(3, kek.begin(), kek.end(), out.begin(), my_func, 4);
 
     for (const auto& item : out) {
         std::cout << item << " ";

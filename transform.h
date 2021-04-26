@@ -19,33 +19,36 @@
 #include <csignal>
 #include <pthread.h>
 #include <memory>
+#include <mutex>
 
-#define CHUNK_SIZE 3
+struct MyMemoryCleaner {
+    explicit MyMemoryCleaner(size_t len) : len(len) {
+        ptr = mmap(nullptr, len, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
+        if (ptr == MAP_FAILED) {
+            throw std::runtime_error(std::strerror(errno));
+        }
+    }
+
+    ~MyMemoryCleaner() {
+        if (ptr != nullptr) {
+            munmap(ptr, len);
+        }
+    }
+
+    void* ptr;
+
+private:
+    size_t len;
+};
 
 template<class IIt, class ValueType>
-struct my_mutex {
+struct myState {
     IIt start;
     IIt end;
-    pthread_mutex_t *mutex;
-    size_t len;
-
     ValueType *ptr;
+    pthread_mutex_t mutex;
 
-    explicit my_mutex(std::size_t len): len(len) {
-        auto my_ptr = mmap(nullptr, len, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
-        if (my_ptr == MAP_FAILED) {
-            throw std::runtime_error(std::strerror(errno));
-        }
-        ptr = reinterpret_cast<ValueType *>(my_ptr);
-        errno = 0;
-        off_t my_size = sizeof(pthread_mutex_t);
-
-        auto addr = mmap(nullptr, my_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
-        if (addr == MAP_FAILED) {
-            throw std::runtime_error(std::strerror(errno));
-        }
-        auto *mutex_ptr = (pthread_mutex_t *) addr;
-
+    explicit myState(IIt start, IIt end, ValueType* ptr): start(start), end(end), ptr(ptr) {
         pthread_mutexattr_t attr;
         if (pthread_mutexattr_init(&attr)) {
             throw std::runtime_error(std::strerror(errno));
@@ -53,62 +56,52 @@ struct my_mutex {
         if (pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED)) {
             throw std::runtime_error(std::strerror(errno));
         }
-        if (pthread_mutex_init(mutex_ptr, &attr)) {
+        if (pthread_mutex_init(&mutex, &attr)) {
             throw std::runtime_error(std::strerror(errno));
         }
-
-        mutex = mutex_ptr;
     }
 
     void lock() {
-        auto err = pthread_mutex_lock(mutex);
+        auto err = pthread_mutex_lock(&mutex);
         if (err != 0) {
             throw std::runtime_error("failed to lock mutex");
         }
     }
 
     void unlock() {
-        auto err = pthread_mutex_unlock(mutex);
+        auto err = pthread_mutex_unlock(&mutex);
         if (err != 0) {
             throw std::runtime_error("failed to unlock mutex");
         }
     }
 
-    ~my_mutex() {
-        pthread_mutex_destroy(mutex);
-        if (mutex != nullptr) {
-            munmap(mutex, sizeof(pthread_mutex_t));
-        }
-        if (ptr != nullptr) {
-            munmap(ptr, len);
-        }
+    ~myState() {
+        pthread_mutex_destroy(&mutex);
     }
 
 private:
 };
 
 template<typename IIt, typename Func, typename ValueType>
-void runTask(Func f, my_mutex<IIt, ValueType> mm) {
-    std::cout << "runTask " << getpid() << "\n";
+void runTask(Func f, myState<IIt, ValueType>* mm, uint chunk_size) {
     while (true) {
-        //std::cout << "try in " << getpid() << "\n";
-        mm.lock();
-        std::cout << "in " << getpid() << "\n";
-        auto my_start = mm.start;
-        auto my_end = mm.end;
-        auto my_out = mm.ptr;
-        if (mm.start == mm.end) {
-            mm.unlock();
-            return;
+        IIt my_start;
+        IIt my_end;
+        ValueType* my_out;
+        {
+            std::unique_lock<myState<IIt, ValueType>> lock(*mm);
+            my_start = mm->start;
+            my_out = mm->ptr;
+            if (mm->start == mm->end) {
+                return;
+            }
+            for (int i = 0; i < chunk_size; ++i) {
+                if (mm->start == mm->end) break;
+                (mm->start)++;
+                (mm->ptr)++;
+            }
+            my_end = mm->start;
         }
-        for (int i = 0; i < CHUNK_SIZE; ++i) {
-            if (mm.start == mm.end) break;
-            mm.start++;
-            mm.ptr++;
-        }
-        my_end = mm.start;
-        std::cout << "out " << getpid() << "\n";
-        mm.unlock();
         while (my_start != my_end) {
             new(my_out) ValueType(f(*my_start));
             my_start++;
@@ -118,7 +111,7 @@ void runTask(Func f, my_mutex<IIt, ValueType> mm) {
 }
 
 template<typename IIt, typename OIt, typename Func>
-void transform(uint n_proc, IIt start, IIt end, OIt o_start, Func f) {
+void transform(uint n_proc, IIt start, IIt end, OIt o_start, Func f, uint chunk_size) {
     auto len = std::distance(start, end);
     if (len == 0) return;
     if (n_proc > len) {
@@ -127,40 +120,53 @@ void transform(uint n_proc, IIt start, IIt end, OIt o_start, Func f) {
 
     using ValueType = decltype(f(*start));
 
-    auto mm = my_mutex<IIt, ValueType>(len * sizeof(ValueType));
-    mm.start = start;
-    mm.end = end;
-    auto my_ptr = mm.ptr;
+    auto mem = MyMemoryCleaner(len + sizeof(myState<IIt, ValueType>));
+    auto* mm = reinterpret_cast<myState<IIt, ValueType>*>(mem.ptr);
+
+    auto* ptr = reinterpret_cast<ValueType *>(mm + 1);
+
+    new (mm) myState<IIt, ValueType>(start, end, ptr);
+
     std::vector<int> pids(n_proc);
     for (int i = 0; i < n_proc; ++i) {
         int child = fork();
         if (child == -1) {
             perror("fork");
-            return;
+            throw std::runtime_error("fork");
         } else if (child != 0) {
-            std::cout << "fork created " << child << "\n";
             pids[i] = child;
         } else {
             try {
-                runTask(f, mm);
+                runTask(f, mm, chunk_size);
             } catch (std::exception &e) {
                 std::cerr << e.what() << std::endl;
             }
-            exit(0);
+            exit(EXIT_FAILURE);
         }
     }
 
     for (int i = 0; i < n_proc; i++) {
-        std::cout << "start waiting for  " << pids[i] << "\n";
-        waitpid(pids[i], nullptr, 0);
+        int status;
+        do {
+            pid_t w;
+            w = waitpid(pids[i], &status, WUNTRACED | WCONTINUED);
+            if (w == -1) {
+                perror("waitpid");
+                exit(EXIT_FAILURE);
+            }
+
+            if (WIFEXITED(status)) {
+                printf("exited, status=%d\n", WEXITSTATUS(status));
+            } else if (WIFSIGNALED(status)) {
+                printf("killed by signal %d\n", WTERMSIG(status));
+            } else if (WIFSTOPPED(status)) {
+                printf("stopped by signal %d\n", WSTOPSIG(status));
+            } else if (WIFCONTINUED(status)) {
+                printf("continued\n");
+            }
+        } while (!WIFEXITED(status) && !WIFSIGNALED(status));
     }
-    while (start != end) {
-        *o_start = std::move(*my_ptr);
-        o_start++;
-        my_ptr++;
-        start++;
-    }
-    std::cout << "end parent  " << "\n";
+    std::move(ptr, mm->ptr, o_start);
 }
 
 #endif //HW_TRANSFORM_H
