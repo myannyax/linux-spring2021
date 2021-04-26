@@ -120,7 +120,7 @@ void transform(uint n_proc, IIt start, IIt end, OIt o_start, Func f, uint chunk_
 
     using ValueType = decltype(f(*start));
 
-    auto mem = MyMemoryCleaner(len + sizeof(myState<IIt, ValueType>));
+    auto mem = MyMemoryCleaner(len * sizeof (ValueType) + sizeof(myState<IIt, ValueType>));
     auto* mm = reinterpret_cast<myState<IIt, ValueType>*>(mem.ptr);
 
     auto* ptr = reinterpret_cast<ValueType *>(mm + 1);
@@ -168,5 +168,76 @@ void transform(uint n_proc, IIt start, IIt end, OIt o_start, Func f, uint chunk_
     }
     std::move(ptr, mm->ptr, o_start);
 }
+
+template<typename IIt, typename Func, typename ValueType>
+void basicRunTask(Func f, IIt start, IIt end, ValueType* out) {
+    while (start != end) {
+        new (out) ValueType(f(*start));
+        start++;
+        out++;
+    }
+}
+
+template<typename IIt, typename OIt, typename Func>
+void basicTransform(uint n_proc, IIt start, IIt end, OIt o_start, Func f, uint chunk_size) {
+    auto len = std::distance(start, end);
+    if (len == 0) return;
+    if (n_proc > len) {
+        n_proc = len;
+    }
+    auto partLen = len / n_proc;
+
+    using ValueType = decltype(f(*start));
+
+    auto mem = MyMemoryCleaner(len * sizeof(ValueType));
+
+    auto* ptr = reinterpret_cast<ValueType *>(mem.ptr);
+
+    std::vector<int> pids(n_proc);
+    int c = 0;
+    for (int i = 0; i < n_proc; ++i) {
+        auto my_begin = start;
+        std::advance(start, partLen);
+        int child = fork();
+        if (child == -1) {
+            perror("fork");
+            throw std::runtime_error("fork");
+        } else if (child != 0) {
+            pids[i] = child;
+            c += partLen;
+        } else {
+            try {
+                basicRunTask(f, my_begin, start, ptr + c);
+            } catch (std::exception &e) {
+                std::cerr << e.what() << std::endl;
+            }
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    for (int i = 0; i < n_proc; i++) {
+        int status;
+        do {
+            pid_t w;
+            w = waitpid(pids[i], &status, WUNTRACED | WCONTINUED);
+            if (w == -1) {
+                perror("waitpid");
+                exit(EXIT_FAILURE);
+            }
+
+            if (WIFEXITED(status)) {
+                printf("exited, status=%d\n", WEXITSTATUS(status));
+            } else if (WIFSIGNALED(status)) {
+                printf("killed by signal %d\n", WTERMSIG(status));
+            } else if (WIFSTOPPED(status)) {
+                printf("stopped by signal %d\n", WSTOPSIG(status));
+            } else if (WIFCONTINUED(status)) {
+                printf("continued\n");
+            }
+        } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+    }
+    std::move(ptr, ptr + len, o_start);
+}
+
 
 #endif //HW_TRANSFORM_H
