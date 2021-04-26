@@ -91,7 +91,7 @@ template<typename IIt, typename Func, typename ValueType>
 void runTask(Func f, my_mutex<IIt, ValueType> mm) {
     std::cout << "runTask " << getpid() << "\n";
     while (true) {
-        std::cout << "try in " << getpid() << "\n";
+        //std::cout << "try in " << getpid() << "\n";
         mm.lock();
         std::cout << "in " << getpid() << "\n";
         auto my_start = mm.start;

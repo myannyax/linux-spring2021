@@ -1,4 +1,5 @@
 #include "transform.h"
+#include "test.h"
 using namespace std;
 
 int my_func(int a) {
@@ -7,6 +8,7 @@ int my_func(int a) {
 }
 
 int main() {
+    test();
     std::vector<int> kek(15);
     std::vector<int> out(15);
     for (int i = 0; i < 15; ++i) {
