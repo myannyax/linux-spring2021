@@ -16,7 +16,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/types.h>
-#include <signal.h>
+#include <csignal>
 #include <pthread.h>
 #include <memory>
 
@@ -34,7 +34,6 @@ struct my_mutex {
     explicit my_mutex(std::size_t len): len(len) {
         auto my_ptr = mmap(nullptr, len, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
         if (my_ptr == MAP_FAILED) {
-            my_ptr = nullptr;
             throw std::runtime_error(std::strerror(errno));
         }
         ptr = reinterpret_cast<ValueType *>(my_ptr);
